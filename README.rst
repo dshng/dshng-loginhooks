@@ -7,7 +7,7 @@ dshng-loginhooks - Login/Logout Hooks
    :maxdepth: 1
 
 .. comment: split here
-
+.. |copy|   unicode:: U+000A9 .. COPYRIGHT SIGN
 
 Status and License
 ------------------
@@ -15,7 +15,7 @@ Status and License
 dshng-loginhooks was written by Rob Moggach, for `Dashing Collective Inc. <http://dashing.tv>`_
 It is licensed under an `MIT-style permissive license <https://github.com/dshng/python-dirtt/raw/master/LICENSE.txt>`_.
 
-(c) 2011 Dashing Collective Inc. and contributors.
+|copy| 2011 Dashing Collective Inc. and contributors.
 
 Licensed under the MIT license: http://www.opensource.org/licenses/mit-license.php
 

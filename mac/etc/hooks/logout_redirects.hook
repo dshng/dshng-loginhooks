@@ -1,0 +1,156 @@
+#!/bin/sh
+# 
+#  logout_redirect.hook
+#
+#  Mac OS X logout hook used to tear down folder redirections
+#
+#  Usage:
+#    Define variable '$LOCAL_DATA_DIR' below.
+#    All paths to tear down are based on values set within:
+#
+#        ~/Library/.HW_ADDRESS.loginfile
+#
+#    ('HW_ADDRESS' is the machines MAC address)
+#      
+
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin:/usr/local/sbin
+
+#
+# ----- V A R I A B L E S -----
+#
+# Local Data Directory
+# Change this to the local folder where all user data will be stored
+LOCAL_DATA_DIR="/Users/Network"
+
+# Binary Paths
+# Declare paths to our binaries
+declare -x awk="/usr/bin/awk"
+declare -x cat="/bin/cat"
+declare -x chown="/usr/sbin/chown"
+declare -x date="/bin/date"
+declare -x defaults="/usr/bin/defaults"
+declare -x dscl="/usr/bin/dscl"
+declare -x expr="/bin/expr"
+declare -x grep="/usr/bin/grep"
+declare -x id="/usr/bin/id"
+declare -x ifconfig="/sbin/ifconfig"
+declare -x ln="/bin/ln"
+declare -x logger="/usr/bin/logger"
+declare -x mkdir="/bin/mkdir"
+declare -x mv="/bin/mv"
+declare -x ntpdate="/usr/sbin/ntpdate"
+declare -x rm="/bin/rm"
+declare -x rsync="/usr/bin/rsync"
+declare -x touch="/usr/bin/touch"
+
+# Static Variables
+# These are system generated defaults
+THE_USER=$1
+eval THE_HOME=~$1
+LOCAL_USER_DIR="${LOCAL_DATA_DIR:?}/$1"
+NETWORK_USER_DIR=$THE_HOME
+THE_DATE="$("$date" +'%m%d%y')"
+HW_ADDRESS="$("$ifconfig" en0 | "$awk" '/ether/ { gsub(":", ""); print $2 }')"
+LOGGER_FLAGS="-t 'logouthook'"
+EXIT_CODE=0
+VER="2011061601"
+
+
+# Initialize
+# begin logging
+"$logger" $LOGGER_FLAGS "Executing logout script version $VER for user: $THE_USER with home: $THE_HOME..."
+START_TIME="$(date +'%s')"
+
+#
+# ----- F U N C T I O N S -----
+#
+ 
+function tearDownPath() {
+    # function accepts a single parameter, a path to a symlink relative to ~
+    # This function will destroy a symlink at this location, and attempt
+    # to restore any network directories created by loginhook redirections
+    # -- see redirectPath() function --
+    #
+    # Dependencies:
+    #    The following vars must be set: $THE_USER, $NETWORK_USER_DIR
+    
+    declare -x SRC_PATH="$1"
+    declare -x REDIRECT_FLAGS="$2"
+    
+    # sanity checks on SRC_PATH
+    if [ -z "$SRC_PATH"  ]; then
+        "${logger:=/usr/bin/logger}" $LOGGER_FLAGS " - tearDownPath() Error: no source path specified!"
+        return 1
+    fi
+    
+    "$logger" $LOGGER_FLAGS " Tearing down Redirected Folder: $SRC_PATH"
+
+    # sanity checks on resources
+    declare -x NETWORK_PATH="${NETWORK_USER_DIR:?}/${SRC_PATH:?}"
+        
+    # do our teardown
+    if [ -L "${NETWORK_PATH:?}" ]; then
+        "$rm" "$NETWORK_PATH"
+    fi
+    
+    # if there is a file or directory at our location, we die
+    if ( [ -f "$NETWORK_PATH" ] || [  -d "$NETWORK_PATH" ] ); then
+            "$logger" $LOGGER_FLAGS "   - Teardown failed, file or dir resides at: $NETWORK_PATH"
+        return 2
+    fi
+
+    # if our REDIRECT_FLAGS
+    if ([ "$REDIRECT_FLAGS" == "moveExisting" ] || [ "$REDIRECT_FLAGS" == "syncExisting" ]); then
+        # find any possible replacements
+        declare -x BASE_NAME=$("${basename:=/usr/bin/basename}" "$NETWORK_PATH");
+        declare -x BASE_DIR=$("${dirname:=/usr/bin/dirname}" "$NETWORK_PATH");
+        
+        # get our last iterated network folder (in case there is more than 1)
+        THE_DIR=$(ls "$BASE_DIR" | "${grep:=/usr/bin/grep}" "${BASE_NAME} (network)" | tail -1) 
+        if ( [ ! -z "$THE_DIR" ] && [ -d "$BASE_DIR/$THE_DIR" ] ); then   
+            "$logger" $LOGGER_FLAGS "   - Renaming directory: $THE_DIR to $NETWORK_PATH"
+            "$mv" "$BASE_DIR/$THE_DIR" "$NETWORK_PATH"
+        fi
+    fi
+    return 0
+}
+
+
+#
+# ----- M A I N   S C R I P T   E X E C U T I O N -----
+#
+
+# Get the space separated list of paths to tear down
+# and delete the file
+if [ -f "$THE_HOME/Library/.$HW_ADDRESS.loginfile" ]; then
+    TEARDOWN_PATHS="$("$cat" "$THE_HOME/Library/.$HW_ADDRESS.loginfile")"
+    "$rm" "$THE_HOME/Library/.$HW_ADDRESS.loginfile"
+fi
+
+# Check for login files from other computers less than 24 hours old.
+LOGIN_FILES="$(ls "$THE_HOME"/Library/.*.loginfile 2> /dev/null | "$grep" -v $HW_ADDRESS | head -1)"
+LOGIN_FILE_COUNT="$(ls "$THE_HOME"/Library/.*.loginfile 2> /dev/null | "$grep" -c -v $HW_ADDRESS)"
+
+if [ $LOGIN_FILE_COUNT == 0 ]; then
+    if [ ! -z "TEARDOWN_PATHS" ]; then
+        OLD_IFS=$IFS
+        IFS=$','
+        for redirect in $TEARDOWN_PATHS; do
+            PATH_TO_TEARDOWN="$(echo "$redirect" | "$awk" -F: '{print $1}')"
+            REDIRECT_FLAG="$(echo "$redirect" | "$awk" -F: '{print $2}')"
+            tearDownPath "$PATH_TO_TEARDOWN" "$REDIRECT_FLAG"
+            if [ $? != 0 ]; then
+                EXIT_CODE=$?
+            fi
+        done;
+        IFS=$OLD_IFS
+    else
+        "$logger" $LOGGER_FLAGS "   - Could not determine teardown paths from loginfile!, exiting"
+    fi
+else
+    "$logger" $LOGGER_FLAGS "   - Another machine appears to be logged in: $LOGIN_FILES - Preserving links, aborting teardown"
+fi
+
+"$logger" $LOGGER_FLAGS "Finished Executing logout script."
+
+exit $EXIT_CODE

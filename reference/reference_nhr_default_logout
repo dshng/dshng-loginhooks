@@ -1,0 +1,38 @@
+#!/bin/sh
+# /etc/hooks/logout_nhr_defaults.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.
+# Once you are done, put the "#" back at the beginning of the line.
+
+PATH=/bin:/usr/bin:/usr/sbin
+export PATH
+logger "LogoutHook: Starting for $1"
+
+LOCAL=`dscl . -list /Users |grep -x $1`
+
+if [[ "$1" == "$LOCAL" ]]; then
+        exit 0
+fi
+
+eval HOMELOC=~$1
+
+#This will remove the user folder in /tmp, delete the current user's symlinked folders on the server, and delete the contents of the user's trash.
+rm -rf /tmp/$1
+rm -rf "$HOMELOC"/.Trash/*
+rm -rf "$HOMELOC"/Library/Caches
+rm -rf "$HOMELOC"/Library/Fonts
+rm -rf "$HOMELOC"/Documents/Microsoft\ User\ Data
+rm -rf "$HOMELOC"/Documents/AppleWorks\ User\ Data
+rm -rf "$HOMELOC"/Library/Preferences/Microsoft
+rm -rf "$HOMELOC"/Library/Application\ Support/Microsoft/Office
+rm -rf "$HOMELOC"/Movies
+rm -rf "$HOMELOC"/Music
+rm -rf "$HOMELOC"/Pictures
+rm -rf "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/Gallery
+rm -rf "$HOMELOC"/Library/Application\ Support/Adobe
+rm -rf /iMovie\ Events
+rm -rf /iMovie\ Projects
+
+logger - "LogoutHook:  Finished for $1"

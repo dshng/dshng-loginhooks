@@ -1,0 +1,8 @@
+#! /bin/sh
+SCRIPT="/etc/hooks/logout.master.hook"
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin
+
+export PATH
+${SCRIPT} $*
+
+exit 0

@@ -1,0 +1,11 @@
+#! /bin/sh
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin
+SCRIPT="/etc/hooks/login.master.hook"
+
+export PATH
+${SCRIPT} $*
+sudo -u $1 softwareupdate --schedule off
+
+exit 0
+
+

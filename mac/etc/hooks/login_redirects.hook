@@ -1,0 +1,414 @@
+#!/bin/bash
+# 
+#  login_redirect.hook
+#
+#  Mac OS X login hook used to create folder redirections
+#
+#  Usage:
+#      Specify variables '$LOCAL_DATA_DIR' and '$REDIRECT_DIRS'
+#      The former is a simple path which will contain
+#      User-specific redirect folders.
+#      $REDIRECT_DIRS is a comma separated list of redirect parameter.
+#      Each paramater consists of two colon separated components,
+#      the first value is the path to redirect, the second option
+#      includes flags to determine our redirect style. 
+#  
+#      Example:
+#          LOCAL_DATA_DIR="/Users/Local"
+#          REDIRECT_DIRS="Library/Caches:deleteExisting,Sites:moveExisting"
+#      
+#          In this example, we will redirect ~/Library/Caches to 
+#          /Users/Local/shortname/Library/Caches, it will delete any item 
+#          existing in the home directory at that path. We will also redirect
+#          ~/Sites, but we will rename an existing item to ~/Sites (network)
+#
+#          A third option syncExisting, can be used to copy items from network
+#          folders to local folders prior to redirection. At this point
+#          this is a one-way sync (local contents are not copied back to the
+#          server at logout).
+#      
+
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin:/usr/local/sbin
+
+#
+# ----- V A R I A B L E S -----
+#
+# Local Data Directory
+# Change this to the local folder where all user data will be stored
+LOCAL_DATA_DIR="/Users/Network"
+REDIRECTS_FILE="/etc/hooks/redirects.conf"
+
+# Tune AFP client settings 
+# (sets afp_wan_quantum to 131700 and afp_wan_threshold to 1000)
+# set to 1 for true
+declare -x -i AFP_TUNING=0
+
+# Look for and clear iPhoto locks
+# set to 1 for true
+declare -x -i IPHOTO_LOCK_FIX=0
+
+# look for and clear FireFox locks
+# set to 1 for true
+declare -x -i FIREFOX_LOCK_FIX=0
+
+# Binary Paths
+# Declare paths to our binaries
+declare -x awk="/usr/bin/awk"
+declare -x basename="/usr/bin/basename"
+declare -x chown="/usr/sbin/chown"
+declare -x chmod="/bin/chmod"
+declare -x date="/bin/date"
+declare -x defaults="/usr/bin/defaults"
+declare -x dscl="/usr/bin/dscl"
+declare -x expr="/bin/expr"
+declare -x find="/usr/bin/find"
+declare -x grep="/usr/bin/grep"
+declare -x id="/usr/bin/id"
+declare -x ifconfig="/sbin/ifconfig"
+declare -x ln="/bin/ln"
+declare -x ls="/bin/ls"
+declare -x logger="/usr/bin/logger"
+declare -x mkdir="/bin/mkdir"
+declare -x mv="/bin/mv"
+declare -x ntpdate="/usr/sbin/ntpdate"
+declare -x rm="/bin/rm"
+declare -x rsync="/usr/bin/rsync"
+declare -x stat="/usr/bin/stat"
+declare -x touch="/usr/bin/touch"
+
+
+# Redirected Directories
+# Specify our Redirects
+# Eg: REDIRECT_DIRS="Library/Caches:deleteExisting,Library/Fonts:syncExisting"
+#
+REDIRECT_DIRS="Documents/Final Cut Pro Documents:moveExisting,"
+REDIRECT_DIRS+="Documents/DVD Studio Pro Documents:moveExisting,"
+REDIRECT_DIRS+="Documents/Color Documents:moveExisting,"
+REDIRECT_DIRS+="Documents/Microsoft User Data:syncExisting,"
+REDIRECT_DIRS+="Library/Preferences/Microsoft:syncExisting,"
+REDIRECT_DIRS+="Library/Application Support/Microsoft/Office:syncExisting,"
+REDIRECT_DIRS+="Library/Fonts:syncExisting,"
+REDIRECT_DIRS+="Library/Icons:syncExisting,"
+REDIRECT_DIRS+="Library/Mail/Signatures:syncExisting,"
+REDIRECT_DIRS+="Library/Mirrors:syncExisting,"
+REDIRECT_DIRS+="Library/Preferences/ByHost:syncExisting,"
+REDIRECT_DIRS+="Library/Safari/Icons:syncExisting,"
+REDIRECT_DIRS+="Library/Thunderbird:syncExisting,"
+REDIRECT_DIRS+="Library/Application Support/Adobe:moveExisting,"
+REDIRECT_DIRS+="Library/Mail:moveExisting,"
+REDIRECT_DIRS+="Movies:moveExisting,"
+REDIRECT_DIRS+="Music:moveExisting,"
+REDIRECT_DIRS+="Pictures:moveExisting,"
+REDIRECT_DIRS+="Library/Application Support/Adobe/Acrobat:deleteExisting,"
+REDIRECT_DIRS+="Library/Application Support/SyncServices:deleteExisting,"
+REDIRECT_DIRS+="Library/Caches:deleteExisting,"
+REDIRECT_DIRS+="Library/Logs:deleteExisting,"
+REDIRECT_DIRS+="Library/Preferences/Macromedia/Flash Player:deleteExisting,"
+REDIRECT_DIRS+="Library/Printers:deleteExisting,"
+REDIRECT_DIRS+=".Trash:deleteExisting"
+
+# Static Variables
+# These are system generated defaults
+THE_USER=$1
+eval THE_HOME=~$1
+LOCAL_USER_DIR="${LOCAL_DATA_DIR:?}/$1"
+NETWORK_USER_DIR=$THE_HOME
+THE_DATE="$("$date" +'%m%d%y')"
+HW_ADDRESS="$("$ifconfig" en0 | "$awk" '/ether/ { gsub(":", ""); print $2 }')"
+# LOGGER_FLAGS="-t loginhook -s"
+LOGGER_FLAGS="-t loginhook -f /var/log/redirects.log"
+EXIT_CODE=0
+VERSION="2011061601"
+
+
+# Initialize
+# begin logging
+"$logger" $LOGGER_FLAGS "Executing login script v.$VERSION for user $THE_USER with home $THE_HOME..."
+START_TIME="$("$date" +'%s')"
+
+#
+# ----- F U N C T I O N S -----
+#
+ 
+function redirectPath () {
+#
+#    function accepts two parameters, the first is a path relative to ~
+#    the second controls behavior of data existing in network home. 
+#
+#    Acceptable values include:
+#      deleteExisting:  Delete existing item in network home
+#      syncExisting:    Perform an rsync of network path to local path then move
+#      moveExisting:    Renames the network item to ${path} (network), enumerates if necessary
+# 
+#    Dependencies:
+#      The following vars must be set:
+#        $THE_USER
+#        $LOCAL_USER_DIR
+#        $NETWORK_USER_DIR
+#
+
+    declare -x SRC_PATH="$1"
+    declare -x FLAGS="$2"
+    
+    "$logger" $LOGGER_FLAGS " Redirecting Folder: $SRC_PATH with flags: $FLAGS"
+    
+    # sanity checks on SRC_PATH
+    if [ -z "$SRC_PATH"  ]; then
+        "${logger:=/usr/bin/logger}" $LOGGER_FLAGS " - redirectPath() Error: no source path specified!"
+        return 1
+    fi
+    
+    # sanity checks on flags
+    if [ -z "$FLAGS" ]; then
+        FLAGS="moveExisting"
+    fi
+    
+    OLD_IFS=$IFS
+    IFS=$','
+    GOOD_FLAG_VALUES="deleteExisting,syncExisting,moveExisting"
+    for value in $GOOD_FLAG_VALUES; do
+        if [ "$FLAGS" == "$value" ] ; then
+            IS_GOOD_VALUE=true
+        fi    
+    done
+    IFS=$','
+    if [ "$IS_GOOD_VALUE" != true ]; then
+        "$logger" $LOGGER_FLAGS " - redirectPath() Error: invalid option: $FLAGS, using moveExisting"
+        FLAGS="moveExisting"
+        EXIT_CODE=1    
+    fi
+
+    # sanity checks on resources
+    declare -x LOCAL_PATH="${LOCAL_USER_DIR:?}/${SRC_PATH:?}"
+    if ( [ ! -d "${LOCAL_PATH:?}" ] ); then
+        "${mkdir:=/bin/mkdir}" -p "$LOCAL_PATH"
+        if [ $? != 0 ]; then
+            "$logger" $LOGGER_FLAGS " - redirectPath() Error: Could not create redirection folder, exiting"
+            return 2
+        fi
+    fi 
+
+    # check ownership on the file, if our user doesn't match, propagate owner
+    if [ "$("$stat" -f "%u" "$LOCAL_PATH")" != "$("$id" -u ${THE_USER:?})" ]; then
+        "$logger" $LOGGER_FLAGS " - redirectPath() Error: User is not the owner of their local redirect folder, populating values!"
+        "${chown:=/usr/sbin/chown}" -R "${THE_USER:?}" "$LOCAL_PATH" &> /dev/null
+        if [ $? != 0 ]; then
+                "$logger" $LOGGER_FLAGS "   - redirectPath() Error changing ownership on: $LOCAL_PATH"
+        fi
+    else
+        "$logger" $LOGGER_FLAGS "  - redirectPath() Permissions checks pass!"
+    fi
+    
+    # push out 700 to the local folder.
+    "${chmod:=/bin/chmod}" 700 "$LOCAL_PATH" &> /dev/null
+    if [ $? != 0 ]; then
+            "$logger" $LOGGER_FLAGS "   - redirectPath() Error changing permissions on: $LOCAL_PATH"
+    fi
+
+    # if our network dir is there, redirect as per our flags
+    declare -x NETWORK_PATH="${NETWORK_USER_DIR:?}/${SRC_PATH:?}"
+    if ( [ -L "${NETWORK_PATH:?}" ] ); then
+        "${rm:=/bin/rm}" "$NETWORK_PATH"
+    fi
+    if [ -f "$NETWORK_PATH" ]; then
+        "$logger" $LOGGER_FLAGS " - redirectPath() Error: Found file when expecting directory at: $NETWORK_PATH, renaming"
+         # check for everyone deny delete acl and remove (it prevents us from working)
+        declare -x ACL_NUM="$("${ls:=/bin/ls}" -aled "$NETWORK_PATH" | "$awk" -F: '/everyone deny delete/ {print $1}')"
+        if ( [ ! -z "$ACL_NUM" ] && [ $ACL_NUM -ge 0 ] ); then
+            "$logger" $LOGGER_FLAGS "     - Removing ACL 'everyone deny delete'" 
+            "${chmod}" -a# ${ACL_NUM} "$NETWORK_PATH" 
+        fi
+        "${mv:=/bin/mv}" "$NETWORK_PATH" "$NETWORK_PATH (redirected)"
+    fi
+
+    "$logger" $LOGGER_FLAGS " - Redirection from: $NETWORK_PATH to: $LOCAL_PATH"
+
+    # Perfom sync if necessary, perform (network) folder rename checks 
+    if ( [ "$FLAGS" == "moveExisting" ] || [ "$FLAGS" == "syncExisting" ] ); then
+        if [ -d "$NETWORK_PATH" ]; then
+            if [ "$FLAGS" == "syncExisting" ]; then
+                "$logger" $LOGGER_FLAGS "   - Sync existing dir: $NETWORK_PATH/ to: $LOCAL_PATH/"
+                "${rsync:=/usr/bin/rsync}" -auE "$NETWORK_PATH"/ "$LOCAL_PATH"/
+            fi
+            if ( [ ! -d "${NETWORK_PATH} (network)" ] && [ ! -f "${NETWORK_PATH} (network)" ] ); then
+                NEW_PATH="${NETWORK_PATH} (network)"
+            else
+                i=1
+                while ( [ -d "${NETWORK_PATH} (network) $i" ] || [ -f "${NETWORK_PATH} (network) $i" ] ); do
+                    i="$(expr $i + 1)"
+                done
+                NEW_PATH="${NETWORK_PATH} (network) $i"
+            fi
+            
+            "$logger" $LOGGER_FLAGS "   - Moving existing object: $NETWORK_PATH to: $NEW_PATH"
+            # check for everyone deny delete acl and remove (it prevents us from working)
+            declare -x ACL_NUM="$("${ls:=/bin/ls}" -aled "$NETWORK_PATH" | "$awk" -F: '/everyone deny delete/ {print $1}')"
+            if ( [ ! -z "$ACL_NUM" ] && [ $ACL_NUM -ge 0 ] ); then
+                "$logger" $LOGGER_FLAGS "     - Removing ACL 'everyone deny delete'" 
+                "${chmod}" -a# ${ACL_NUM} "$NETWORK_PATH" 
+            fi
+            "$mv" "${NETWORK_PATH}" "$NEW_PATH" || 
+            ( "$logger" $LOGGER_FLAGS "     - Move failed with code: $?, aborting!" && 
+            return 3  ) 
+            
+        fi
+    elif [ "$FLAGS" == "deleteExisting" ]; then
+        if ([ -d "$NETWORK_PATH" ] || [ -f "$NETWORK_PATH" ]); then
+            "$logger" $LOGGER_FLAGS "   - Removing existing dir: $NETWORK_PATH"
+            # check for everyone deny delete acl and remove (it prevents us from working)
+            declare -x ACL_NUM="$("${ls:=/bin/ls}" -aled "$NETWORK_PATH" | "$awk" -F: '/everyone deny delete/ {print $1}')"
+            if ( [ ! -z "$ACL_NUM" ] && [ $ACL_NUM -ge 0 ] ); then
+                "$logger" $LOGGER_FLAGS "     - Removing ACL 'everyone deny delete'" 
+                "${chmod}" -a# ${ACL_NUM} "$NETWORK_PATH" 
+            fi
+            "$rm" -r "$NETWORK_PATH"
+        fi
+    fi
+        
+    # If the folder structure hasn't been created yet, then create it now 
+    declare -x parentDir="$("${basename:=/usr/bin/basename}" "$NETWORK_PATH")"
+    if [ ! -d "$parentDir" ]; then
+            "$logger" $LOGGER_FLAGS "   - Redirectpath: \"$parentDir\" not found! creating parent folder..."
+            "$mkdir" -p "$parentDir"
+            "$chown" "$THE_USER" "$parentDir"
+    fi
+    
+    # Create our symlink
+    "$logger" $LOGGER_FLAGS "   - Creating symbolic link: \"$ln\" -s \"$LOCAL_PATH\" \"$NETWORK_PATH\""
+    "${ln:=/bin/ln}" -s "$LOCAL_PATH" "$NETWORK_PATH"
+    if [ $? != 0 ]; then
+        "$logger" $LOGGER_FLAGS "  - Failed to establish symbolic link, code: $?"
+    fi
+    return 0
+}
+
+
+#
+# ----- M A I N   S C R I P T   E X E C U T I O N -----
+#
+
+
+# ----- A F P   T U N I N G -----
+if [ $AFP_TUNING -ge 1 ]; then
+    "$logger" $LOGGER_FLAGS "Tuning AFP client settings"
+    "$defaults" write -g com.apple.AppleShareClientCore -dict-add afp_wan_quantum -int 131700
+    "$defaults" write -g com.apple.AppleShareClientCore -dict-add afp_wan_threshold -int 1000
+fi
+
+
+# ----- I P H O T O   F I X -----
+if [ $IPHOTO_LOCK_FIX -ge 1 ]; then
+    "$logger" $LOGGER_FLAGS " - Running iPhotoFix"
+    if ( [ -f "$THE_HOME"/Pictures/iPhoto\ Library/iPhotoLock.data ] && [ "$EXISTING_LOGIN" != "true" ] ); then 
+        "$logger" $LOGGER_FLAGS "    * iPhoto Lock file found! Removing!"
+        rm "$THE_HOME"/Pictures/iPhoto\ Library/iPhotoLock.data
+    fi
+fi
+
+
+# ----- F I R E F O X   F I X -----
+if [ $FIREFOX_LOCK_FIX -ge 1 ]; then
+    "$logger" $LOGGER_FLAGS " - Running FirefoxFix"
+    FIREFOX_PATH="$THE_HOME/Library/Application Support/Firefox"
+    if [ -f "$FIREFOX_PATH/profiles.ini" ]; then
+       "$logger" $LOGGER_FLAGS "    * Profile found at $FIREFOX_PATH/profile.ini"
+        FIREFOX_PROFILE_DIR=`cat "$FIREFOX_PATH/profiles.ini" | awk -F= '/Path/ {print$2}'`
+    else
+       "$logger" $LOGGER_FLAGS "    * Error: No profile file found at $FIREFOX_PATH/profiles.ini!"
+    fi
+    FIREFOX_LOCK_FILE="$FIREFOX_PATH/$FIREFOX_PROFILE_DIR/.parentLock"
+    "$logger" $LOGGER_FLAGS "    * Profile directory: $FIREFOX_PATH/$FIREFOX_PROFILE_DIR"
+
+    if ( [ -f "$FIREFOX_LOCK_FILE" ] && [ "$EXISTING_LOGIN" != "true" ] ); then 
+        "$logger" $LOGGER_FLAGS "    * Firefox lock file found! Removing!"
+        rm "$FIREFOX_LOCK_FILE"
+    fi
+fi
+
+
+# ----- L O C A L   U S E R   C H E C K -----
+# check to see if the user has a local home, and quit if so
+"$logger" $LOGGER_FLAGS "Checking user source"
+
+if [ $(echo "$THE_HOME" | grep -e "^/Users") ]; then
+    "$logger" $LOGGER_FLAGS "User has a local home directory: \"$THE_HOME\", aborting!" && exit 1
+fi
+
+
+# ----- N E T W O R K   U S E R   C H E C K -----
+# If our network home directory doesn't exist, bail out!
+if [ ! -d "$NETWORK_USER_DIR" ]; then
+    "$logger" $LOGGER_FLAGS "Network home directory path: \"$NETWORK_USER_DIR\""
+    ." does not exist, loginhook is aborting!";
+    exit 5
+fi
+
+
+# ----- I N I T I A L I Z E   L O G I N   F I L E S -----
+# delete any stale login files
+"$logger" $LOGGER_FLAGS "Registering login, clearing out expired login cache"
+"$find" "$THE_HOME"/Library -maxdepth 1 -mtime +1 -name ".*.loginhook" -exec "$rm" {} \;
+
+# Check for login files from other computers less than 24 hours old.
+LOGIN_FILE_COUNT="$(ls "$THE_HOME"/Library/.*.loginfile 2> /dev/null | "$grep" -c -v $HW_ADDRESS)"
+if [ $LOGIN_FILE_COUNT == 0 ]; then
+    EXISTING_LOGIN=false
+fi
+
+# touch our login file
+echo "$REDIRECT_DIRS" > "$THE_HOME"/Library/".${HW_ADDRESS}.loginfile"
+
+
+# ----- I N I T I A L I Z E   D A T A   D I R E C T O R Y -----
+# create global local data folder if it doesn't exist
+if [ ! -d "${LOCAL_DATA_DIR:?}" ]; then
+    "$mkdir" -p "$LOCAL_DATA_DIR"
+    "$chown" root:wheel "$LOCAL_DATA_DIR"
+fi
+# create local user data folder if it doesn't exist
+if [ ! -d "$LOCAL_USER_DIR" ]; then
+    "$mkdir" -p "$LOCAL_USER_DIR"
+fi
+
+# check ownership on the folder, if our user doesn't match, propagate owner
+if [ "$("$stat" -f "%u" "$LOCAL_USER_DIR")" != "$("$id" -u ${THE_USER:?})" ]; then
+    "$logger" $LOGGER_FLAGS " - Error: User is not the owner of their local redirect folder, populating values!"
+    "$chown" "$THE_USER" "$LOCAL_USER_DIR"
+fi
+# push out 700 to the local folder.
+"${chmod:=/bin/chmod}" 700 "$LOCAL_USER_DIR" &> /dev/null
+if [ $? != 0 ]; then
+    "$logger" $LOGGER_FLAGS "   - Error changing permissions on: $LOCAL_USER_DIR"
+fi
+
+
+# ----- S E T U P   R E D I R E C T S -----
+
+"$logger" $LOGGER_FLAGS "Setting up local caching scheme for $THE_USER with home $THE_HOME..."
+
+# setup the IFS variable - Internal Field Separator - default is space so reset
+if [ ! -z "REDIRECT_DIRS" ]; then
+    OLD_IFS=$IFS
+    IFS=$','
+    for redirect in $REDIRECT_DIRS; do
+        THE_DIR="$(echo "$redirect" | "$awk" -F: '{print $1}')"
+        REDIRECT_FLAG="$(echo "$redirect" | "$awk" -F: '{print $2}')"
+        redirectPath "$THE_DIR" "$REDIRECT_FLAG"
+        if [ $? != 0 ]; then
+            EXIT_CODE=$?
+        fi
+    done;
+    IFS=$OLD_IFS
+fi
+
+
+# ----- P E R F O R M A N C E   L O G G I N G -----
+# do our time calculations
+END_TIME="$("$date" +'%s')"
+TOTAL_SEC="$("$expr" ${END_TIME:?} - ${START_TIME:?})"
+MIN="$("$expr" ${TOTAL_SEC:?} / 60)"
+SEC="$("$expr" ${TOTAL_SEC:?} % 60)"
+"$logger" $LOGGER_FLAGS "Completed operations in $MIN minutes and $SEC seconds"
+
+exit $EXIT_CODE
+    

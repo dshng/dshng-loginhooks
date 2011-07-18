@@ -1,0 +1,29 @@
+#! /bin/sh
+# /etc/hooks/login.master.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.
+# Once you are done, put the "#" back at the beginning of the line.
+
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin:/usr/local/sbin
+HOOKSDIR="/etc/hooks"
+export PATH
+
+# check for HOOKSDIR
+if [ -d ${HOOKSDIR} ]; then
+	# iterate through 'Login' hooks in HOOKSDIR
+    for hook in ${HOOKSDIR}/login_*; do
+	if [ -s ${hook} -a -x ${hook} ]; then
+	    logger -s -t LoginHook -p user.info Executing ${hook}... 1>&2
+	    # run the item and pass all parameters to the script
+	    ${hook} $*
+	    if [ $? -ne 0 ]; then
+		exit_value=$?
+		logger -s -t LoginHook -p user.info ${hook} failed! 1>&2
+		exit $exit_value
+	    fi
+	fi
+    done
+fi
+exit 0

@@ -1,0 +1,26 @@
+#! /bin/sh
+# /etc/hooks/logout.master.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.  Once you are done, put the "#" back at the beginning of the line.
+
+PATH=/bin:/usr/bin:/usr/local/bin:/sbin:/usr/sbin:/usr/local/sbin
+HOOKSDIR="/etc/hooks"
+export PATH
+
+if [ -d ${HOOKSDIR} ]; then
+    for HOOK in ${HOOKSDIR}/logout_*; do
+	if [ -s ${HOOK} -a -x ${HOOK} ]; then
+	    logger -s -t LogoutHook -p user.info Executing ${HOOK}... 1>&2
+	    # run the item and pass all parameters to the script
+	    ${HOOK} $*
+	    if [ $? -ne 0 ]; then
+		exit_value=$?
+		logger -s -t LogoutHook -p user.info ${HOOK} failed! 1>&2
+		exit $exit_value
+	    fi
+	fi
+    done
+fi
+exit 0

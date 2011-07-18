@@ -1,0 +1,28 @@
+#!/bin/sh
+# /etc/hooks/logout_local_admin.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.
+# Once you are done, put the "#" back at the beginning of the line.
+
+LOCAL=`dscl . -read /Users/$1 |grep AppleMetaNodeLocation |awk '{print$2}'`
+LOCALUSER=`dscl . -read /Users/$1 |grep OriginalNodeName |awk '{print$1}'`
+
+if [[ "$LOCALUSER" == "" && "$LOCAL" == "/Local/Default" ]]; then
+exit 0
+fi
+
+NODE=`dscl localhost -list /LDAPv3 |awk '{print $1}'`
+ADMIN=`dseditgroup -o checkmember -n /LDAPv3/$NODE -m $1 Administrators |awk '{print $1}'`
+ONLINE=`dscl localhost -read /LDAPv3/$NODE/Groups/Administrators | grep "cn:" | awk '{print$2}'`
+	
+if [[ "$ADMIN" == "yes" ]]; then
+dseditgroup -o edit -a $1 -t $1 admin
+exit 0
+fi
+
+if [[ "$ONLINE" == "Administrators" ]]; then
+dseditgroup -o edit -d $1 -t $1 admin
+exit 0
+fi

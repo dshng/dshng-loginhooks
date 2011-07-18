@@ -1,0 +1,36 @@
+#!/bin/sh
+# /etc/hooks/logout_print_admin.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.
+# Once you are done, put the "#" back at the beginning of the line.
+
+LOCAL=`dscl . -read /Users/$1 |grep AppleMetaNodeLocation |awk '{print$2}'`
+LOCAL_USER=`dscl . -read /Users/$1 |grep OriginalNodeName |awk '{print$1}'`
+
+if [[ "$LOCAL_USER" == "" && "$LOCAL" == "/Local/Default" ]]; then
+exit 0
+fi
+
+NODE=`dscl localhost -list /LDAPv3 |awk '{print $1}'`
+PRINTADMIN=`dseditgroup -o checkmember -n /LDAPv3/$NODE -m $1 "Print Operators" |awk '{print $1}'`
+ONLINE=`dscl localhost -read /LDAPv3/$NODE | grep NodePath | awk '{print$3}'`
+CONLINE=`dscl localhost -read /LDAPv3/$NODE/ComputerLists/printadmins | grep dsAttrTypeNative:cn: | awk '{print$2}'`
+NAME=`hostname | awk '{gsub(/.local/,"");print}'`
+COMPUTERPRINTADMIN=`dscl localhost -read /LDAPv3/$NODE/ComputerLists/printadmins | grep Computers |grep $NAME | sed "s/.*\($NAME\)/\1/"`
+
+if [[ "$COMPUTERPRINTADMIN" == "$NAME" ]]; then
+dseditgroup -o edit -a $1 -t $1 _lpadmin
+exit 0
+fi	
+	
+if [[ "$PRINTADMIN" == "yes" ]]; then
+dseditgroup -o edit -a $1 -t $1 _lpadmin
+exit 0
+fi
+
+if [[ "$ONLINE" == "Print Operators" ]]; then
+dseditgroup -o edit -d $1 -t $1 _lpadmin
+exit 0
+fi

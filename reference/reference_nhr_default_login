@@ -1,0 +1,142 @@
+#!/bin/sh
+# /etc/hooks/login_nhr_defaults.hook
+#
+# set -xv; exec 1>>/tmp/out 2>&1
+# The line above is used for logging and troubleshooting only -
+# if you need to troubleshoot this script, remove the "#" from the line.
+# Once you are done, put the "#" back at the beginning of the line.
+
+PATH=/bin:/usr/bin:/usr/sbin
+export PATH
+logger "LoginHook: Starting for $1"
+
+LOCALADMINUSER=`dscl . -list /Users uid |grep 1000 |awk '{print$1}'`
+LOCAL=`dscl . -list /Users |grep -x $1`
+
+#This script will re-direct several folders from a user's network home location to the local machine to help with performance.
+
+if [[ "$1" == "$LOCAL" ]]; then
+        exit 0
+fi
+
+eval HOMELOC=~$1
+
+#This section will verify that there are no DENY DELETE ACL's on the folders - and if so, remove the ACL so that redirection can still take place.
+
+ACLLINE=`ls -led "$HOMELOC"/Library/Caches | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Library/Caches
+
+ACLLINE=`ls -led "$HOMELOC"/Library/Fonts | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Library/Fonts
+
+ACLLINE=`ls -led "$HOMELOC"/Movies | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Movies
+
+ACLLINE=`ls -led "$HOMELOC"/Music | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Music
+
+ACLLINE=`ls -led "$HOMELOC"/Pictures | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Pictures
+
+ACLLINE=`ls -led "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/Gallery | grep "deny delete" | head -1 | awk -F: '{print $1}' | sed 's/^[ \t]*//'`
+chmod -a# $ACLLINE "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/Gallery
+
+#This section will delete the Fonts, Microsoft User Data, AppleWorks User Data, and Microsoft Preferences folders from the current user's network home location.
+rm -rf "$HOMELOC"/Library/Caches
+rm -rf "$HOMELOC"/Library/Fonts
+rm -rf "$HOMELOC"/Documents/Microsoft\ User\ Data
+rm -rf "$HOMELOC"/Documents/AppleWorks\ User\ Data
+rm -rf "$HOMELOC"/Library/Preferences/Microsoft
+rm -rf "$HOMELOC"/Library/Application\ Support/Microsoft/Office
+rm -rf "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/Gallery
+rm -rf "$HOMELOC"/Library/Application\ Support/Adobe
+
+#This section will clean up the local drive, so that iMovie 09 will work with network homes
+rm -rf /iMovie\ Events
+rm -rf /iMovie\ Projects
+
+#This section will create an NHR directory in ~/Library/Application Support folder
+mkdir -p "$HOMELOC"/Library/Application\ Support/NetworkHomeRedirection
+
+#This section will test for the existance of a Movies, Music and Pictures folder in the user's home directory.  If it is a folder, it moves all of the contents into their ~/Library/Application Support/NHR folder.
+Movies=`test -d "$HOMELOC"/Movies && echo Yes`
+if [[ "$Movies" == "Yes" ]]; then
+	mv "$HOMELOC"/Movies "$HOMELOC"/Library/Application\ Support/NetworkHomeRedirection/Movies`date "+%Y_%m_%d_%H_%M"`
+	fi
+rm -rf "$HOMELOC"/Movies
+
+Music=`test -d "$HOMELOC"/Music && echo Yes`
+if [[ "$Music" == "Yes" ]]; then
+	mv "$HOMELOC"/Music "$HOMELOC"/Library/Application\ Support/NetworkHomeRedirection/Music`date "+%Y_%m_%d_%H_%M"`
+	fi
+rm -rf "$HOMELOC"/Music
+
+Pictures=`test -d "$HOMELOC"/Pictures && echo Yes`
+if [[ "$Pictures" == "Yes" ]]; then
+	mv "$HOMELOC"/Pictures "$HOMELOC"/Library/Application\ Support/NetworkHomeRedirection/Pictures`date "+%Y_%m_%d_%H_%M"`
+	fi
+rm -rf "$HOMELOC"/Pictures
+
+#This section will make a folder for the current user in /tmp
+mkdir /tmp/$1/
+mkdir /tmp/$1/Adobe
+mkdir /tmp/$1/Adobe/Acrobat
+mkdir /tmp/$1/Adobe/Illustrator\ CS4
+
+#This will copy several Microsoft folders of the local admin user (make sure this account was the first account set up on the client - with UID 501) to /tmp with the correct permissions.  
+cp -R /Users/$LOCALADMINUSER/Library/Preferences/Microsoft /tmp/$1/Microsoft/
+rm -f "/tmp/$1/Microsoft/Clip Gallery Preferences"
+cp -R /Users/$LOCALADMINUSER/Library/Application\ Support/Microsoft/Office /tmp/$1/Office2008
+cp -R /Users/$LOCALADMINUSER/Documents/Microsoft\ User\ Data /tmp/$1/Microsoft\ User\ Data/
+
+#This will create an AppleWorks User Data folder in /tmp with the correct permissions.
+mkdir /tmp/$1/Appleworks
+
+#This will create the user's Caches folder in /tmp.
+mkdir /tmp/$1/Caches
+
+#This will check for the Notebook application (SMART) and create a SMART folder in /tmp (if needed).
+SMART=`test -e /Applications/Notebook\ Software/Notebook.app && echo Yes`
+
+if [[ "$SMART" == "Yes" ]]; then
+	mkdir /tmp/$1/SMART
+	mkdir -p "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/
+fi
+
+#This will change ownership of all files in /tmp/$1 to the current user
+chown -R `dscl /Search -read /Users/$1 UniqueID | awk '{print $2}'` /tmp/$1
+
+#This will create the Microsoft and Adobe folders, inside the Application Support folder, for the user.
+mkdir "$HOMELOC"/Library/Application\ Support/Microsoft
+mkdir "$HOMELOC"/Library/Application\ Support/Adobe
+
+#This will create a Movies, Music and Pictures folder in /Users/Network/ with the correct permissions.
+mkdir /Users/Network/
+mkdir /Users/Network/$1
+mkdir /Users/Network/$1/Movies
+mkdir /Users/Network/$1/Music
+mkdir /Users/Network/$1/Pictures
+chown -R $1:admin /Users/Network/$1
+chmod -R 770 /Users/Network/$1
+
+#This last section will set up symbolic links for the current user.
+ln -s /tmp/$1/Caches/ "$HOMELOC"/Library/Caches
+ln -s /Library/Fonts/ "$HOMELOC"/Library/Fonts
+ln -s /tmp/$1/Appleworks "$HOMELOC"/Documents/AppleWorks\ User\ Data
+ln -s /tmp/$1/Microsoft/ "$HOMELOC"/Library/Preferences/Microsoft
+ln -s /tmp/$1/Microsoft\ User\ Data/ "$HOMELOC"/Documents/Microsoft\ User\ Data
+ln -s /tmp/$1/Office2008/ "$HOMELOC"/Library/Application\ Support/Microsoft/Office
+ln -s /Users/Network/$1/Movies "$HOMELOC"/Movies
+ln -s /Users/Network/$1/Music "$HOMELOC"/Music
+ln -s /Users/Network/$1/Pictures "$HOMELOC"/Pictures
+ln -s /tmp/$1/SMART/ "$HOMELOC"/Library/Application\ Support/SMART\ Technologies\ Inc/Gallery
+ln -s /tmp/$1/Adobe/Acrobat/ "$HOMELOC"/Library/Application\ Support/Adobe/Acrobat
+ln -s /tmp/$1/Adobe/Illustrator\ CS4/ "$HOMELOC"/Library/Application\ Support/Adobe/Illustrator\ CS4
+mkdir /Users/Network/$1/Movies/iMovie\ Events
+mkdir /Users/Network/$1/Movies/iMovie\ Projects
+ln -s /Users/Network/$1/Movies/iMovie\ Events /iMovie\ Events
+ln -s /Users/Network/$1/Movies\ Projects /iMovie\ Projects
+chown -R $1:admin /Users/Network/$1
+chmod -R 770 /Users/Network/$1
+
+logger - "LoginHook:  Finished for $1"
